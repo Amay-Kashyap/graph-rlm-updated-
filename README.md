@@ -24,6 +24,7 @@ The repository is packaged as code only. Patient note CSVs are not included.
 - `src/evaluation/openai_evaluator.py`: live OpenAI evaluation runner
 - `vendor/rlm-minimal`: vendored minimal recursive language model scaffold
 - `docs/METHODOLOGY.md`: methodology, ground-truth design, and key challenges
+- `docs/RESULTS.md`: retained offline results and the documented historical live configuration
 
 ## Data assumptions
 
@@ -72,6 +73,7 @@ The evaluation set for free-text notes does not rely on loose answer heuristics 
 This makes the benchmark auditable. When a model answer is wrong, the evaluator can trace the failure back to the specific note, encounter, imaging, diagnosis, or procedure nodes that established the label.
 
 See [METHODOLOGY.md](/C:/Users/Amay%20Kashyap%20Deka/Downloads/Graph%20RLM%20project/graph-rlm/docs/METHODOLOGY.md) for the full methodology and challenge analysis.
+See [RESULTS.md](/C:/Users/Amay%20Kashyap%20Deka/Downloads/Graph%20RLM%20project/graph-rlm/docs/RESULTS.md) for the retained offline results and the documented `52%` live Graph-RLM configuration.
 
 ## Repository hygiene
 
