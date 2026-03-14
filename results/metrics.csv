@@ -1,0 +1,19 @@
+system,category,questions,accuracy_pct,avg_tokens_per_query,avg_cost_per_query,token_efficiency_ratio
+Full-Context,ALL,500,100.0,4708.71,0.029429,0.021237
+Graph-RLM,ALL,500,100.0,665.5,0.004159,0.150263
+Naive RAG,ALL,500,27.2,403.93,0.002525,0.067339
+Full-Context,absence_detection,100,100.0,4360.84,0.027255,0.022931
+Graph-RLM,absence_detection,100,100.0,352.29,0.002202,0.283857
+Naive RAG,absence_detection,100,50.0,370.19,0.002314,0.135066
+Full-Context,causal_chain,100,100.0,4357.93,0.027237,0.022947
+Graph-RLM,causal_chain,100,100.0,374.99,0.002344,0.266674
+Naive RAG,causal_chain,100,0.0,399.68,0.002498,0.0
+Full-Context,longitudinal_trend,100,100.0,3399.42,0.021246,0.029417
+Graph-RLM,longitudinal_trend,100,100.0,579.38,0.003621,0.172598
+Naive RAG,longitudinal_trend,100,72.0,313.83,0.001961,0.229424
+Full-Context,multi_hop_reasoning,100,100.0,5301.0,0.033131,0.018864
+Graph-RLM,multi_hop_reasoning,100,100.0,1549.6,0.009685,0.064533
+Naive RAG,multi_hop_reasoning,100,0.0,544.95,0.003406,0.0
+Full-Context,temporal_proximity,100,100.0,6124.37,0.038277,0.016328
+Graph-RLM,temporal_proximity,100,100.0,471.23,0.002945,0.212211
+Naive RAG,temporal_proximity,100,14.0,390.99,0.002444,0.035807

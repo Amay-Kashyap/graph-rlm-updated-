@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.env
+.venv/
+venv/
+
+results/openai_*.csv
+results/breast_note_graph_stats.csv
+data/processed/openai_questions.json
+
+patient_*.csv
+*.log
