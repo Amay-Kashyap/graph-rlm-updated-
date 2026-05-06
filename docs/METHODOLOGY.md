@@ -1,4 +1,4 @@
-# Methodology
+﻿# Methodology
 
 ## Objective
 
@@ -52,7 +52,7 @@ Three answering systems are implemented:
 - `Naive RAG`: retrieves top lexical chunks from the source notes
 - `Graph-RLM`: navigates the patient graph iteratively and reads only selected evidence
 
-The live Graph-RLM controller uses a minimal recursive language model scaffold vendored under `vendor/rlm-minimal` and adapted to the graph tools in this project.
+The live Graph-RLM controller supports both the minimal recursive language model scaffold vendored under `vendor/rlm-minimal` and a LangGraph state-machine controller. The LangGraph controller makes the `Orient -> Investigate -> Analyze -> Answer` loop explicit, so graph traversal, candidate filtering, answer finalization, and trace capture are separable stages.
 
 ## Question generation
 
@@ -64,7 +64,7 @@ The benchmark covers several reasoning patterns:
 - absence detection
 - multi-hop reasoning
 
-For the free-text setting, questions are generated only when the graph contains enough structured support to justify a traceable answer.
+For the free-text setting, questions are generated only when the graph contains enough structured support to justify a traceable answer. The public 100-question curation plan is documented in `docs/QUESTION_PROTOCOL.md`. In short, the protocol follows established benchmark-design ideas from multi-hop QA, biomedical QA, clinical QA, and temporal clinical NLP: every item must have explicit supporting evidence, a typed reasoning category, a stated temporal scope when needed, and graph-linked provenance.
 
 ## Ground-truth protocol
 
@@ -74,6 +74,8 @@ Each generated question stores:
 
 - `ground_truth`: the expected answer text
 - `supporting_node_ids`: the exact node identifiers that support that answer
+- `supporting_edge_ids`, when available: the graph edges that establish the answer path
+- `required_path_pattern`, when available: the graph traversal pattern being tested
 
 This design matters for four reasons.
 

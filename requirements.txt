@@ -2,3 +2,6 @@ pandas>=2.2
 networkx>=3.2
 matplotlib>=3.8
 openai>=2.24
+langgraph>=1.1
+langchain-core>=1.2
+langchain-openai>=1.1

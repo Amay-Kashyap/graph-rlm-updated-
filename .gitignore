@@ -1,12 +1,28 @@
-__pycache__/
+﻿__pycache__/
 *.py[cod]
 .env
+.env.*
+!.env.example
 .venv/
 venv/
 
+# Private clinical notes and local source data
+patient_*.csv
+data/raw/
+
+# Generated private/live artifacts
+reports/
 results/openai_*.csv
 results/breast_note_graph_stats.csv
+results/langgraph_*.csv
+results/organic_*.json
+results/rlm_architecture_comparison_*.csv
+results/synthetic_30_all_systems_comparison*.csv
 data/processed/openai_questions.json
+data/processed/langgraph_questions.json
+data/processed/synthetic_facts.json
 
-patient_*.csv
+# Local temp/runtime artifacts
+.repl_tmp/
 *.log
+scripts/two_patient_trace_report.py

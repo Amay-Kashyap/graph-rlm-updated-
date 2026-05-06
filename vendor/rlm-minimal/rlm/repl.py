@@ -5,6 +5,7 @@ import json
 import tempfile
 import os
 import time
+from pathlib import Path
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Optional
@@ -78,9 +79,15 @@ class REPLEnv:
     ):
         # Store the original working directory
         self.original_cwd = os.getcwd()
-        
-        # Create temporary directory (but don't change global working directory)
-        self.temp_dir = tempfile.mkdtemp(prefix="repl_env_")
+
+        # Create temporary directory inside a caller-controlled writable root when available.
+        temp_root = os.getenv("RLM_REPL_TMPDIR", "").strip()
+        if temp_root:
+            temp_root_path = Path(temp_root)
+            temp_root_path.mkdir(parents=True, exist_ok=True)
+            self.temp_dir = tempfile.mkdtemp(prefix="repl_env_", dir=str(temp_root_path))
+        else:
+            self.temp_dir = tempfile.mkdtemp(prefix="repl_env_")
 
 
         # Initialize minimal RLM / LM client. Change this to support more depths.
@@ -198,28 +205,12 @@ class REPLEnv:
             self.code_execution(setup_code)
     
     def load_context(self, context_json: Optional[dict | list] = None, context_str: Optional[str] = None):
-        # Write context JSON to temporary directory using absolute (temp dir) path
+        # Load context directly into the REPL to avoid unnecessary filesystem writes.
         if context_json is not None:
-            context_path = os.path.join(self.temp_dir, "context.json")
-            with open(context_path, "w") as f:
-                json.dump(context_json, f, indent=2)
-            context_code = (
-                f"import json\n"
-                f"with open(r'{context_path}', 'r') as f:\n"
-                f"    context = json.load(f)\n"
-            )
-            self.code_execution(context_code)
+            self.locals["context"] = context_json
         
         if context_str is not None:
-            context_path = os.path.join(self.temp_dir, "context.txt")
-            with open(context_path, "w") as f:
-                f.write(context_str)
-            context_code = (
-                f"import os\n"
-                f"with open(r'{context_path}', 'r') as f:\n"
-                f"    context = f.read()\n"
-            )
-            self.code_execution(context_code)
+            self.locals["context"] = context_str
     
     def __del__(self):
         """Clean up temporary directory when object is destroyed"""
@@ -253,13 +244,24 @@ class REPLEnv:
     
     @contextmanager
     def _temp_working_directory(self):
-        """Context manager to temporarily change working directory for REPL execution"""
+        """Use the temp directory only when the environment permits chdir.
+
+        Some Windows sandbox configurations allow creating the directory but reject
+        changing into it. In that case, keep the original working directory and
+        continue because this REPL no longer depends on cwd-local context files.
+        """
         old_cwd = os.getcwd()
+        changed = False
         try:
-            os.chdir(self.temp_dir)
+            try:
+                os.chdir(self.temp_dir)
+                changed = True
+            except OSError:
+                changed = False
             yield
         finally:
-            os.chdir(old_cwd)
+            if changed:
+                os.chdir(old_cwd)
     
     def code_execution(self, code) -> REPLResult:
         """

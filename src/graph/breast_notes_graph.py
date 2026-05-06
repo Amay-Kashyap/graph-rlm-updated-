@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 import networkx as nx
 import pandas as pd
 
-from graph.graph_utils import NODE_TYPES, iso_date
+from graph.graph_utils import NODE_TYPES, canonicalize_text, iso_date
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -20,7 +22,7 @@ TREATMENT_PATTERNS = {
     "ANASTROZOLE": [r"\banastrozole\b", r"\barimidex\b"],
     "CAPECITABINE": [r"\bcapecitabine\b"],
     "CMF": [r"\bcmf\b"],
-    "RADIATION THERAPY": [r"radiation"],
+    "RADIATION THERAPY": [r"\bradiation\b", r"\brt\b"],
     "LUMPECTOMY": [r"\blumpectomy\b"],
     "MASTECTOMY": [r"\bmastectomy\b"],
     "BIOPSY": [r"\bbiopsy\b"],
@@ -47,6 +49,36 @@ IMAGING_PATTERNS = {
     "DEXA": [r"\bdexa\b"],
     "ECHO": [r"\bechocardi", r"transthoracic echo"],
 }
+
+NEGATION_PATTERNS = [
+    r"\bno\b",
+    r"\bnot\b",
+    r"\bwithout\b",
+    r"\bdenies\b",
+    r"\bnegative for\b",
+]
+HISTORICAL_PATTERNS = [
+    r"\bhistory of\b",
+    r"\bprior\b",
+    r"\bprevious\b",
+    r"\bstatus post\b",
+    r"\bs/p\b",
+    r"\bpast medical history\b",
+]
+PLANNED_PATTERNS = [
+    r"\bplan(?:ned)?\b",
+    r"\bwill\b",
+    r"\bscheduled\b",
+    r"\bto start\b",
+    r"\brecommend(?:ed|ation)?\b",
+]
+FOLLOWUP_PATTERNS = [
+    r"\bfollow[- ]up\b",
+    r"\bafter\b",
+    r"\bfollowing\b",
+    r"\bsubsequent\b",
+    r"\bnext step\b",
+]
 
 
 def discover_note_files() -> list[Path]:
@@ -75,31 +107,102 @@ def _clean_text(text: str) -> str:
     return re.sub(r"\s+", " ", str(text or "")).strip()
 
 
-def _extract_entities(title: str, text: str) -> dict[str, list[str]]:
-    merged = f"{title} {text}".lower()
-    treatments = []
+def _section_label(title: str, text: str) -> str:
+    merged = f"{title}\n{text[:400]}".lower()
+    if "assessment" in merged:
+        return "assessment"
+    if "impression" in merged:
+        return "impression"
+    if "plan" in merged:
+        return "plan"
+    if "history" in merged:
+        return "history"
+    return "general"
+
+
+def _context_window(text: str, start: int, end: int, radius: int = 80) -> str:
+    return text[max(0, start - radius) : min(len(text), end + radius)]
+
+
+def _classify_context(window: str) -> tuple[str, str, float]:
+    lower = window.lower()
+    if any(re.search(p, lower) for p in NEGATION_PATTERNS):
+        return "negated", "current", 0.05
+    if any(re.search(p, lower) for p in HISTORICAL_PATTERNS):
+        return "asserted", "historical", 0.35
+    if any(re.search(p, lower) for p in PLANNED_PATTERNS):
+        return "asserted", "planned", 0.55
+    return "asserted", "current", 0.9
+
+
+def _make_entity(label: str, entity_type: str, window: str, section: str) -> dict[str, Any]:
+    assertion, temporality, confidence = _classify_context(window)
+    if section in {"assessment", "impression"} and assertion == "asserted" and temporality == "current":
+        confidence = min(1.0, confidence + 0.05)
+    if section == "history" and temporality == "current":
+        temporality = "historical"
+        confidence = min(confidence, 0.45)
+    return {
+        "label": label,
+        "entity_type": entity_type,
+        "assertion": assertion,
+        "temporality": temporality,
+        "confidence": round(confidence, 2),
+        "source_span": _clean_text(window)[:180],
+        "section": section,
+    }
+
+
+def _extract_entities(title: str, text: str) -> dict[str, list[dict[str, Any]]]:
+    merged = f"{title}\n{text}"
+    lowered = merged.lower()
+    section = _section_label(title, text)
+    entities: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    seen: set[tuple[str, str, str, str]] = set()
+
+    def register(label: str, entity_type: str, start: int, end: int) -> None:
+        window = _context_window(merged, start, end)
+        entity = _make_entity(label, entity_type, window, section)
+        key = (entity_type, label, entity["assertion"], entity["temporality"])
+        if key in seen:
+            return
+        seen.add(key)
+        entities[entity_type].append(entity)
+
     for label, regexes in TREATMENT_PATTERNS.items():
         if label == "GEMCITABINE + CARBOPLATIN":
-            if all(re.search(regex, merged) for regex in regexes):
-                treatments.append(label)
-        elif any(re.search(regex, merged) for regex in regexes):
-            treatments.append(label)
-    diagnoses = [
-        label
-        for label, regexes in DIAGNOSIS_PATTERNS.items()
-        if any(re.search(regex, merged) for regex in regexes)
-    ]
-    imaging = [
-        label
-        for label, regexes in IMAGING_PATTERNS.items()
-        if any(re.search(regex, merged) for regex in regexes)
-    ]
-    return {"treatments": treatments, "diagnoses": diagnoses, "imaging": imaging}
+            matches = [re.search(regex, lowered) for regex in regexes]
+            if all(matches):
+                start = min(match.start() for match in matches if match)
+                end = max(match.end() for match in matches if match)
+                register(label, "treatments", start, end)
+            continue
+        for regex in regexes:
+            match = re.search(regex, lowered)
+            if match:
+                register(label, "treatments", match.start(), match.end())
+                break
+
+    for label, regexes in DIAGNOSIS_PATTERNS.items():
+        for regex in regexes:
+            match = re.search(regex, lowered)
+            if match:
+                register(label, "diagnoses", match.start(), match.end())
+                break
+
+    for label, regexes in IMAGING_PATTERNS.items():
+        for regex in regexes:
+            match = re.search(regex, lowered)
+            if match:
+                register(label, "imaging", match.start(), match.end())
+                break
+
+    return {key: value for key, value in entities.items()}
 
 
-def _note_summary(title: str, text: str, entities: dict[str, list[str]]) -> str:
+def _note_summary(title: str, text: str, entities: dict[str, list[dict[str, Any]]]) -> str:
     excerpt = _clean_text(text)[:220]
-    labels = entities["diagnoses"] + entities["treatments"] + entities["imaging"]
+    labels = [item["label"] for group in entities.values() for item in group if item["assertion"] == "asserted"]
     prefix = ", ".join(labels[:4])
     if prefix:
         return f"{title}: {prefix}. {excerpt}".strip()
@@ -116,6 +219,25 @@ def _encounter_key(row: pd.Series) -> tuple[str, str, str]:
     return event_date, visit_type, dept
 
 
+def _should_materialize(entity: dict[str, Any]) -> bool:
+    return entity["assertion"] == "asserted" and entity["temporality"] == "current" and entity["confidence"] >= 0.6
+
+
+def _note_has_text_match(graph: nx.DiGraph, note_id: str, *terms: str) -> bool:
+    if note_id not in graph:
+        return False
+    text = f"{graph.nodes[note_id].get('note_type', '')} {graph.nodes[note_id].get('full_text', '')}".lower()
+    return all(term.lower() in text for term in terms if term)
+
+
+def _supporting_note_ids(graph: nx.DiGraph, encounter_id: str) -> list[str]:
+    return [
+        target
+        for _, target, edge in graph.out_edges(encounter_id, data=True)
+        if edge.get("edge_type") == "DOCUMENTED_IN" and graph.nodes[target].get("node_type") == NODE_TYPES["note"]
+    ]
+
+
 @lru_cache(maxsize=16)
 def get_patient_graph(patient_id: int) -> nx.DiGraph:
     notes = load_patient_notes(patient_id)
@@ -126,8 +248,8 @@ def get_patient_graph(patient_id: int) -> nx.DiGraph:
     procedure_counter = 0
     imaging_counter = 0
     ordered_encounters: list[tuple[str, pd.Timestamp | None]] = []
-    imaging_nodes: list[tuple[str, str]] = []
-    procedure_nodes: list[tuple[str, str]] = []
+    imaging_nodes: list[tuple[str, str, str]] = []
+    procedure_nodes: list[tuple[str, str, str, float]] = []
 
     for row in notes.itertuples(index=False):
         row_dict = row._asdict()
@@ -168,10 +290,11 @@ def get_patient_graph(patient_id: int) -> nx.DiGraph:
             full_text=text,
             department=str(row_dict.get("DEPARTMENT.NAME", "") or ""),
             source_value=str(row_dict.get("NOTE_SOURCE_VALUE", "") or ""),
+            section_label=_section_label(title, text),
         )
         graph.add_edge(enc_id, note_id, edge_type="DOCUMENTED_IN")
 
-        for diagnosis_label in entities["diagnoses"]:
+        for entity in entities.get("diagnoses", []):
             diagnosis_counter += 1
             dx_id = f"dx:{patient_id}:{diagnosis_counter:04d}"
             graph.add_node(
@@ -182,14 +305,19 @@ def get_patient_graph(patient_id: int) -> nx.DiGraph:
                 encounter_id=enc_id,
                 date=note_date,
                 icd_code="",
-                description=diagnosis_label,
-                status="active",
-                summary=f"Diagnosis mention: {diagnosis_label}",
+                description=entity["label"],
+                status="active" if entity["temporality"] == "current" else entity["temporality"],
+                summary=f"Diagnosis mention: {entity['label']}",
+                assertion=entity["assertion"],
+                temporality=entity["temporality"],
+                confidence=entity["confidence"],
+                source_span=entity["source_span"],
+                section_label=entity["section"],
             )
-            graph.add_edge(enc_id, dx_id, edge_type="DIAGNOSED_WITH")
-            graph.add_edge(note_id, dx_id, edge_type="DIAGNOSED_WITH")
+            graph.add_edge(enc_id, dx_id, edge_type="DIAGNOSED_WITH", confidence=entity["confidence"])
+            graph.add_edge(note_id, dx_id, edge_type="MENTIONED_IN", confidence=entity["confidence"])
 
-        for treatment_label in entities["treatments"]:
+        for entity in entities.get("treatments", []):
             procedure_counter += 1
             proc_id = f"proc:{patient_id}:{procedure_counter:04d}"
             graph.add_node(
@@ -200,15 +328,21 @@ def get_patient_graph(patient_id: int) -> nx.DiGraph:
                 encounter_id=enc_id,
                 date=note_date,
                 cpt_code="",
-                description=treatment_label,
+                description=entity["label"],
                 outcome_summary="Mentioned in free-text note.",
-                summary=f"Treatment or procedure mention: {treatment_label}",
+                summary=f"Treatment or procedure mention: {entity['label']}",
+                assertion=entity["assertion"],
+                temporality=entity["temporality"],
+                confidence=entity["confidence"],
+                source_span=entity["source_span"],
+                section_label=entity["section"],
             )
-            graph.add_edge(enc_id, proc_id, edge_type="PERFORMED_DURING")
-            graph.add_edge(note_id, proc_id, edge_type="PERFORMED_DURING")
-            procedure_nodes.append((proc_id, note_date))
+            graph.add_edge(enc_id, proc_id, edge_type="PERFORMED_DURING", confidence=entity["confidence"])
+            graph.add_edge(note_id, proc_id, edge_type="MENTIONED_IN", confidence=entity["confidence"])
+            if _should_materialize(entity):
+                procedure_nodes.append((proc_id, note_date, note_id, entity["confidence"]))
 
-        for imaging_label in entities["imaging"]:
+        for entity in entities.get("imaging", []):
             imaging_counter += 1
             imaging_id = f"img:{patient_id}:{imaging_counter:04d}"
             graph.add_node(
@@ -218,14 +352,20 @@ def get_patient_graph(patient_id: int) -> nx.DiGraph:
                 report_id=imaging_id,
                 encounter_id=enc_id,
                 date=note_date,
-                modality=imaging_label,
+                modality=entity["label"],
                 body_part="breast/chest",
-                summary=f"{imaging_label} referenced in note: {title or 'untitled note'}",
+                summary=f"{entity['label']} referenced in note: {title or 'untitled note'}",
                 full_text=text,
+                assertion=entity["assertion"],
+                temporality=entity["temporality"],
+                confidence=entity["confidence"],
+                source_span=entity["source_span"],
+                section_label=entity["section"],
             )
-            graph.add_edge(enc_id, imaging_id, edge_type="ORDERED_DURING")
-            graph.add_edge(note_id, imaging_id, edge_type="DOCUMENTED_IN")
-            imaging_nodes.append((imaging_id, note_date))
+            graph.add_edge(enc_id, imaging_id, edge_type="ORDERED_DURING", confidence=entity["confidence"])
+            graph.add_edge(note_id, imaging_id, edge_type="MENTIONED_IN", confidence=entity["confidence"])
+            if _should_materialize(entity):
+                imaging_nodes.append((imaging_id, note_date, note_id))
 
     ordered_encounters = sorted(ordered_encounters, key=lambda item: item[1] or pd.Timestamp.min)
     for first, second in zip(ordered_encounters, ordered_encounters[1:]):
@@ -235,16 +375,74 @@ def get_patient_graph(patient_id: int) -> nx.DiGraph:
         return pd.to_datetime(value, errors="coerce")
 
     procedure_nodes.sort(key=lambda item: _to_ts(item[1]))
-    for imaging_id, imaging_date in sorted(imaging_nodes, key=lambda item: _to_ts(item[1])):
+    for imaging_id, imaging_date, source_note_id in sorted(imaging_nodes, key=lambda item: _to_ts(item[1])):
         img_ts = _to_ts(imaging_date)
-        for proc_id, proc_date in procedure_nodes:
+        modality = str(graph.nodes[imaging_id].get("modality", ""))
+        encounter_id = str(graph.nodes[imaging_id].get("encounter_id", ""))
+        image_notes = _supporting_note_ids(graph, encounter_id)
+        best_candidate: tuple[str, float, list[str], str] | None = None
+        for proc_id, proc_date, proc_note_id, proc_conf in procedure_nodes:
             proc_ts = _to_ts(proc_date)
             if pd.isna(img_ts) or pd.isna(proc_ts):
                 continue
             day_delta = int((proc_ts - img_ts).days)
-            if 0 <= day_delta <= 180:
-                graph.add_edge(imaging_id, proc_id, edge_type="RESULTED_IN")
-                break
+            if not 0 <= day_delta <= 120:
+                continue
+            proc_label = str(graph.nodes[proc_id].get("description", ""))
+            proc_enc_id = str(graph.nodes[proc_id].get("encounter_id", ""))
+            proc_notes = _supporting_note_ids(graph, proc_enc_id)
+            confidence = 0.15
+            evidence_note_ids: list[str] = []
+            edge_type = "FOLLOWED_BY_EVENT"
+
+            for note_id in proc_notes:
+                text = f"{graph.nodes[note_id].get('note_type', '')} {graph.nodes[note_id].get('full_text', '')}".lower()
+                if proc_label.lower() in text:
+                    confidence += 0.2
+                    evidence_note_ids.append(note_id)
+                if modality.lower() in text:
+                    confidence += 0.2
+                    evidence_note_ids.append(note_id)
+                if any(re.search(pattern, text) for pattern in FOLLOWUP_PATTERNS):
+                    confidence += 0.15
+                    evidence_note_ids.append(note_id)
+
+            for note_id in image_notes:
+                text = f"{graph.nodes[note_id].get('note_type', '')} {graph.nodes[note_id].get('full_text', '')}".lower()
+                if proc_label.lower() in text and any(re.search(pattern, text) for pattern in PLANNED_PATTERNS):
+                    confidence += 0.2
+                    evidence_note_ids.append(note_id)
+
+            confidence += min(proc_conf, 0.2)
+            if proc_enc_id == encounter_id:
+                confidence += 0.15
+            if day_delta <= 30:
+                confidence += 0.1
+            if day_delta > 90:
+                confidence -= 0.15
+
+            evidence_note_ids = list(dict.fromkeys(evidence_note_ids))
+            if confidence >= 0.75:
+                edge_type = "RESULTED_IN"
+            elif confidence >= 0.55:
+                edge_type = "RECOMMENDED_AFTER"
+            else:
+                continue
+
+            candidate = (proc_id, round(confidence, 2), evidence_note_ids, edge_type)
+            if best_candidate is None or candidate[1] > best_candidate[1]:
+                best_candidate = candidate
+
+        if best_candidate is not None:
+            proc_id, confidence, evidence_note_ids, edge_type = best_candidate
+            graph.add_edge(
+                imaging_id,
+                proc_id,
+                edge_type=edge_type,
+                confidence=confidence,
+                evidence_note_ids=evidence_note_ids,
+                evidence_source=source_note_id,
+            )
 
     return graph
 

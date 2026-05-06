@@ -1,32 +1,38 @@
-# Graph-RLM
+﻿# Graph-RLM
 
-Graph-RLM is a local research prototype for graph-guided reasoning over longitudinal clinical records. The repository contains:
+Graph-RLM is a research prototype for graph-guided recursive reasoning over longitudinal records. The clinical instantiation in this repository focuses on breast oncology timelines, but the architecture is intended for any domain where evidence is distributed across dated documents, typed events, and inter-event relations.
+
+The repository contains:
 
 - an offline pipeline built on the `mimic-iii-clinical-database-demo-1.4` sample data
 - a free-text graph builder for external `patient_*.csv` note files
-- Graph-RLM, naive RAG, and full-context evaluation code
-- an optional OpenAI-backed live evaluator
+- heuristic Graph-RLM, LangGraph Graph-RLM, naive RAG, and full-context evaluation code
+- optional OpenAI-backed live evaluation runners
+- documentation for methodology, retained results, and question construction
 
-The repository is packaged as code only. Patient note CSVs are not included.
+The repository is packaged as code only. Patient note CSVs, local API keys, generated live reports, and private downstream live artifacts are not included.
 
-## Repository layout
+## Repository Layout
 
 - `src/graph/patient_graph.py`: graph builder for the MIMIC-III demo cohort
 - `src/graph/breast_notes_graph.py`: graph builder for external free-text patient note CSVs
+- `src/graph/synthetic_injection.py`: deterministic synthetic fact injection for controlled questions
 - `src/agent/state_machine.py`: heuristic offline Graph-RLM controller
 - `src/agent/minimal_rlm_graph.py`: minimal-RLM-backed live controller
+- `src/agent/langgraph_rlm.py`: LangGraph state-machine Graph-RLM controller
 - `src/agent/tools.py`: graph navigation utilities and token accounting helpers
-- `src/baselines/naive_rag.py`: lexical retrieval baseline
-- `src/baselines/full_context.py`: full-record baseline
 - `src/evaluation/question_generator.py`: offline question generation
 - `src/evaluation/real_question_generator.py`: free-text question generation with explicit evidence support sets
-- `src/evaluation/evaluator.py`: offline evaluation runner
+- `src/evaluation/langgraph_evaluator.py`: mixed organic/synthetic LangGraph evaluation runner
 - `src/evaluation/openai_evaluator.py`: live OpenAI evaluation runner
+- `scripts/mixed_trace_txt_report.py`: local trace report generator for mixed organic/synthetic questions
+- `scripts/mixed_trace_tex_report.py`: local LaTeX trace report generator
 - `vendor/rlm-minimal`: vendored minimal recursive language model scaffold
 - `docs/METHODOLOGY.md`: methodology, ground-truth design, and key challenges
+- `docs/QUESTION_PROTOCOL.md`: literature-backed 100-question curation protocol
 - `docs/RESULTS.md`: retained offline results and the documented historical live configuration
 
-## Data assumptions
+## Data Assumptions
 
 The offline pipeline auto-detects the raw MIMIC demo directory from:
 
@@ -36,10 +42,9 @@ The offline pipeline auto-detects the raw MIMIC demo directory from:
 
 External breast oncology notes are expected as `patient_*.csv` files outside the repository root. They are intentionally excluded from version control.
 
-## Offline run
+## Offline Run
 
 ```powershell
-Set-Location "C:\Users\Amay Kashyap Deka\Downloads\Graph RLM project\graph-rlm"
 $env:PYTHONPATH = "src"
 python -m evaluation.evaluator
 ```
@@ -52,33 +57,37 @@ Outputs:
 - `results/pareto_curve.png`
 - `data/processed/questions.json`
 
-## Live OpenAI run
+## LangGraph Graph-RLM Run
 
 ```powershell
-Set-Location "C:\Users\Amay Kashyap Deka\Downloads\Graph RLM project\graph-rlm"
 $env:PYTHONPATH = "src"
 $env:OPENAI_API_KEY = "<set-at-runtime>"
-python -m evaluation.openai_evaluator --sample-size 25
+python -m evaluation.langgraph_evaluator --sample-size 30
 ```
 
-The live run reads local `patient_*.csv` files if they are present. Generated live artifacts are not tracked by default.
+The LangGraph runner can combine organic graph-backed questions with synthetic controlled questions. Generated live and trace artifacts are ignored by default because they may be downstream products of private local notes.
 
-## Ground truth design
+## Ground Truth Design
 
-The evaluation set for free-text notes does not rely on loose answer heuristics alone. Each generated question stores:
+The free-text benchmark does not rely on loose answer heuristics alone. Each generated question stores:
 
 - `ground_truth`: the expected answer string
-- `supporting_node_ids`: the exact graph nodes that justify that answer
+- `supporting_node_ids`: graph nodes that justify the answer
+- `supporting_edge_ids`, when available: graph edges that establish the reasoning path
+- `required_path_pattern`, when available: the graph traversal pattern being tested
 
-This makes the benchmark auditable. When a model answer is wrong, the evaluator can trace the failure back to the specific note, encounter, imaging, diagnosis, or procedure nodes that established the label.
+This makes the benchmark auditable. When a model answer is wrong, the evaluator can trace the failure to graph construction, retrieval/navigation, evidence reading, or answer synthesis.
 
-See [METHODOLOGY.md](/C:/Users/Amay%20Kashyap%20Deka/Downloads/Graph%20RLM%20project/graph-rlm/docs/METHODOLOGY.md) for the full methodology and challenge analysis.
-See [RESULTS.md](/C:/Users/Amay%20Kashyap%20Deka/Downloads/Graph%20RLM%20project/graph-rlm/docs/RESULTS.md) for the retained offline results and the documented `52%` live Graph-RLM configuration.
+See `docs/METHODOLOGY.md` for the full methodology and challenge analysis.
+See `docs/QUESTION_PROTOCOL.md` for the proposed 100-question curation protocol.
+See `docs/RESULTS.md` for retained offline results and the documented historical `52%` live Graph-RLM configuration.
 
-## Repository hygiene
+## Repository Hygiene
 
 - patient note CSVs are ignored
+- `.env` and local API-key files are ignored
 - generated live evaluation outputs are ignored
-- Python cache and local environment files are ignored
+- generated reports are ignored
+- Python cache and temporary REPL folders are ignored
 
-This keeps the repository safe to publish as code without redistributing the private source notes.
+This keeps the repository safe to publish as code without redistributing private source notes or derived live artifacts.
